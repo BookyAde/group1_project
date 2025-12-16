@@ -10,7 +10,7 @@ from io import BytesIO
 # Apply theme
 try:
     from frontend.components.theme import WarehouseTheme
-    WarehouseTheme.apply_theme()  # This will use the current theme from session state
+    WarehouseTheme.apply_theme()
 except:
     pass
 
@@ -19,7 +19,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 try:
     from frontend.components.theme import WarehouseTheme
     from frontend.components.sidebar import render_sidebar
-    from frontend.utils.config import BACKEND_URL, TIMEOUT
+    from frontend.utils.config import BACKEND_URL, TIMEOUT, SUPABASE_CREDS  # Added SUPABASE_CREDS
 except ImportError:
     class WarehouseTheme:
         @staticmethod
@@ -29,6 +29,7 @@ except ImportError:
             st.write("📁 Data Management")
     BACKEND_URL = "http://localhost:8000/api/v1"
     TIMEOUT = 30
+    SUPABASE_CREDS = {'available': False, 'url': '', 'key': ''}  # Fallback
 
 st.set_page_config(
     page_title="Data Management - Data Warehouse",
@@ -63,20 +64,43 @@ st.markdown(f"""
 
 st.markdown("---")
 
-# Fetch current datasets
+# Fetch current datasets from Supabase
 @st.cache_data(ttl=30)
 def fetch_datasets():
-    """Fetch datasets from backend"""
+    """Fetch datasets from Supabase or fallback"""
     try:
+        # Use Supabase if available
+        if SUPABASE_CREDS.get('available'):
+            headers = {
+                'apikey': SUPABASE_CREDS['key'],
+                'Authorization': f'Bearer {SUPABASE_CREDS["key"]}'
+            }
+            
+            response = requests.get(
+                f"{SUPABASE_CREDS['url']}/rest/v1/datasets",
+                headers=headers,
+                params={'select': '*', 'order': 'id.desc'},
+                timeout=TIMEOUT
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                st.error(f"Supabase error {response.status_code}")
+                return []
+                
+        # Fallback to original backend
         response = requests.get(f"{BACKEND_URL}/data/list", timeout=TIMEOUT)
         if response.status_code == 200:
             return response.json().get('datasets', [])
-    except:
-        pass
+            
+    except Exception as e:
+        st.error(f"Fetch error: {str(e)[:100]}")
+        
     return []
 
 # Upload section
-st.markdown("## 📤 Upload to Backend")
+st.markdown("## 📤 Upload to Supabase")
 
 upload_tab1, upload_tab2 = st.tabs(["File Upload", "Quick Templates"])
 
@@ -101,21 +125,21 @@ with upload_tab1:
                 if st.button("Upload", key=f"upload_{file.name}"):
                     with st.spinner(f"Uploading {file.name}..."):
                         try:
-                            from frontend.utils.config import SUPABASE_CREDS
-                            
-                            if SUPABASE_CREDS['available']:
+                            if SUPABASE_CREDS.get('available'):
                                 headers = {
                                     'apikey': SUPABASE_CREDS['key'],
                                     'Authorization': f'Bearer {SUPABASE_CREDS["key"]}',
                                     'Content-Type': 'application/json',
+                                    'Prefer': 'return=representation'
                                 }
                                 
                                 dataset_data = {
                                     "filename": file.name,
-                                    "size_mb": file.size / (1024 * 1024),
+                                    "size_mb": round(file.size / (1024 * 1024), 2),
                                     "rows": 0,
                                     "user_email": st.session_state.user_email,
-                                    "uploaded_at": datetime.now().isoformat()
+                                    "uploaded_at": datetime.now().isoformat(),
+                                    "status": "uploaded"
                                 }
                                 
                                 response = requests.post(
@@ -126,17 +150,17 @@ with upload_tab1:
                                 )
                                 
                                 if response.status_code == 201:
-                                    st.success(f"✅ {file.name} uploaded successfully!")
+                                    st.success(f"✅ {file.name} uploaded!")
                                     st.balloons()
                                     st.cache_data.clear()
                                     st.rerun()
                                 else:
-                                    st.error(f"Upload failed: {response.status_code}")
+                                    st.error(f"Failed: {response.status_code} - {response.text[:200]}")
                             else:
                                 st.error("Supabase not configured")
                                 
                         except Exception as e:
-                            st.error(f"Upload error: {str(e)[:100]}")
+                            st.error(f"Error: {str(e)[:100]}")
 
 # List datasets
 st.markdown("## 📋 Your Datasets")
@@ -145,29 +169,27 @@ with st.spinner("Loading datasets..."):
     datasets = fetch_datasets()
 
 if not datasets:
-    st.info("No datasets uploaded yet. Use the upload section above to add data.")
+    st.info("No datasets found. Upload some files!")
 else:
-    # Search and filter
-    search_term = st.text_input("🔍 Search datasets:", placeholder="Filter by name...")
+    st.success(f"Found {len(datasets)} dataset(s)")
     
-    # Filter datasets
-    filtered_datasets = datasets
-    if search_term:
-        filtered_datasets = [d for d in datasets if search_term.lower() in d.get('filename', '').lower()]
-    
-    st.success(f"Found {len(filtered_datasets)} dataset(s)")
-    
-    # Display as cards
-    for dataset in filtered_datasets:
+    for dataset in datasets:
         with st.container():
             col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
             
             with col1:
-                st.markdown(f"**{dataset.get('filename')}**")
-                st.caption(f"ID: {dataset.get('id', 'N/A')[:8]}... • Uploaded: {dataset.get('uploaded_at', '')[:10]}")
+                st.markdown(f"**{dataset.get('filename', 'Unnamed')}**")
+                uploaded = dataset.get('uploaded_at', '')
+                if uploaded:
+                    if 'T' in uploaded:
+                        date_part = uploaded.split('T')[0]
+                    else:
+                        date_part = uploaded[:10]
+                    st.caption(f"Uploaded: {date_part}")
             
             with col2:
-                st.markdown(f"**{dataset.get('rows', 0):,}**")
+                rows = dataset.get('rows', 0)
+                st.markdown(f"**{rows:,}**")
                 st.caption("rows")
             
             with col3:
@@ -176,23 +198,10 @@ else:
                     st.switch_page("pages/1_Analytics.py")
             
             with col4:
-                if st.button("🗑️ Delete", key=f"delete_{dataset.get('id')}", use_container_width=True):
-                    st.warning(f"Delete {dataset.get('filename')}?")
-                    if st.button("Confirm Delete", key=f"confirm_{dataset.get('id')}"):
-                        # Note: You need to implement DELETE endpoint in backend
-                        st.info("Delete feature coming soon...")
-                        # response = requests.delete(f"{BACKEND_URL}/data/{dataset.get('id')}")
-                        # if response.status_code == 200:
-                        #     st.success("Dataset deleted")
-                        #     st.cache_data.clear()
-                        #     st.rerun()
-            
+                if st.button("🗑️", key=f"delete_{dataset.get('id')}", use_container_width=True, help="Delete"):
+                    st.warning(f"Delete {dataset.get('filename', 'this dataset')}?")
+                    
             st.markdown("---")
-
-# Update session stats
-if 'total_files' in st.session_state:
-    st.session_state.total_files = len(datasets)
-    st.session_state.total_rows = sum(d.get('rows', 0) for d in datasets)
 
 st.markdown("---")
 st.caption(f"📁 Data Management • {len(datasets)} datasets • {datetime.now().strftime('%H:%M:%S')}")
