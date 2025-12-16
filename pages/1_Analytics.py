@@ -228,13 +228,13 @@ if selected_display:
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             st.metric("Numeric Columns", len(numeric_cols))
     
-    # Visualization tabs
+       # Visualization tabs
     tab1, tab2, tab3 = st.tabs(["📈 Charts", "🔍 Insights", "📊 Statistics"])
     
     with tab1:
         st.markdown("### 📈 Interactive Visualization")
         
-        chart_type = st.selectbox("Chart Type", ["Line Chart", "Bar Chart", "Scatter Plot", "Histogram"])
+        chart_type = st.selectbox("Chart Type", ["Line Chart", "Bar Chart", "Scatter Plot", "Histogram", "Box Plot", "Area Chart"])
         
         if chart_type == "Line Chart":
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -248,6 +248,8 @@ if selected_display:
                 
                 fig.update_traces(line_color='#FFD700')
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No numeric columns found for line chart")
         
         elif chart_type == "Bar Chart":
             categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
@@ -261,10 +263,175 @@ if selected_display:
                 fig = px.bar(agg_df, x=cat_col, y=num_col, title=f"Average {num_col} by {cat_col}")
                 fig.update_traces(marker_color='#FFD700')
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                if not categorical_cols:
+                    st.warning("No categorical columns found for bar chart")
+                if not numeric_cols:
+                    st.warning("No numeric columns found for bar chart")
+        
+        elif chart_type == "Scatter Plot":
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            if len(numeric_cols) >= 2:
+                col1, col2 = st.columns(2)
+                with col1:
+                    x_col = st.selectbox("X-axis:", numeric_cols, key='scatter_x')
+                with col2:
+                    y_col = st.selectbox("Y-axis:", numeric_cols, key='scatter_y')
+                
+                # Check for categorical column for color coding
+                categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+                color_col = None
+                if categorical_cols:
+                    color_col = st.selectbox("Color by (optional):", ['None'] + categorical_cols)
+                    if color_col == 'None':
+                        color_col = None
+                
+                fig = px.scatter(df, x=x_col, y=y_col, color=color_col, 
+                                title=f"{y_col} vs {x_col}", 
+                                trendline="ols" if len(df) > 10 else None)
+                
+                # Customize colors
+                if not color_col:
+                    fig.update_traces(marker=dict(color='#FFD700', size=10, opacity=0.7))
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show correlation
+                if len(df) > 1:
+                    correlation = df[x_col].corr(df[y_col])
+                    st.metric(f"Correlation ({x_col} vs {y_col})", f"{correlation:.3f}")
+            else:
+                st.warning("Need at least 2 numeric columns for scatter plot")
+        
+        elif chart_type == "Histogram":
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            if numeric_cols:
+                col1, col2 = st.columns(2)
+                with col1:
+                    hist_col = st.selectbox("Select column:", numeric_cols)
+                with col2:
+                    bins = st.slider("Number of bins:", 5, 100, 20)
+                
+                fig = px.histogram(df, x=hist_col, nbins=bins, 
+                                  title=f"Distribution of {hist_col}",
+                                  color_discrete_sequence=['#FFD700'])
+                
+                # Add mean line
+                mean_val = df[hist_col].mean()
+                fig.add_vline(x=mean_val, line_dash="dash", line_color="red", 
+                            annotation_text=f"Mean: {mean_val:.2f}")
+                
+                # Show statistics
+                col_stat1, col_stat2, col_stat3 = st.columns(3)
+                with col_stat1:
+                    st.metric("Mean", f"{mean_val:.2f}")
+                with col_stat2:
+                    st.metric("Median", f"{df[hist_col].median():.2f}")
+                with col_stat3:
+                    st.metric("Std Dev", f"{df[hist_col].std():.2f}")
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No numeric columns found for histogram")
+        
+        elif chart_type == "Box Plot":
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+            
+            if numeric_cols:
+                col1, col2 = st.columns(2)
+                with col1:
+                    box_col = st.selectbox("Value column:", numeric_cols)
+                
+                # Optional grouping
+                group_col = None
+                if categorical_cols:
+                    with col2:
+                        group_col = st.selectbox("Group by (optional):", ['None'] + categorical_cols)
+                        if group_col == 'None':
+                            group_col = None
+                
+                if group_col:
+                    fig = px.box(df, x=group_col, y=box_col, 
+                                title=f"{box_col} by {group_col}",
+                                color=group_col)
+                else:
+                    fig = px.box(df, y=box_col, title=f"Distribution of {box_col}")
+                
+                fig.update_traces(marker_color='#FFD700')
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No numeric columns found for box plot")
+        
+        elif chart_type == "Area Chart":
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            if numeric_cols:
+                area_col = st.selectbox("Select metric:", numeric_cols)
+                
+                if 'Date' in df.columns:
+                    fig = px.area(df, x='Date', y=area_col, 
+                                 title=f"{area_col} over time (Area Chart)")
+                else:
+                    fig = px.area(df, y=area_col, 
+                                 title=f"{area_col} (Area Chart)")
+                
+                fig.update_traces(line_color='#FFD700', fillcolor='rgba(255, 215, 0, 0.3)')
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No numeric columns found for area chart")
     
     with tab2:
         st.markdown("### 🔍 Data Insights")
         
+        # Create columns for better layout
+        col_insight1, col_insight2 = st.columns(2)
+        
+        with col_insight1:
+            # Top correlations
+            st.markdown("#### 🔗 Top Correlations")
+            numeric_df = df.select_dtypes(include=[np.number])
+            if len(numeric_df.columns) > 1:
+                corr_matrix = numeric_df.corr()
+                
+                # Find top correlations
+                correlations = []
+                for i in range(len(corr_matrix.columns)):
+                    for j in range(i+1, len(corr_matrix.columns)):
+                        col1 = corr_matrix.columns[i]
+                        col2 = corr_matrix.columns[j]
+                        corr_value = corr_matrix.iloc[i, j]
+                        correlations.append({
+                            'Pair': f"{col1} ↔ {col2}",
+                            'Correlation': corr_value,
+                            'Strength': 'Strong' if abs(corr_value) > 0.7 else 
+                                       'Moderate' if abs(corr_value) > 0.3 else 'Weak'
+                        })
+                
+                corr_df = pd.DataFrame(correlations)
+                corr_df = corr_df.sort_values('Correlation', key=abs, ascending=False)
+                
+                # Show top 5
+                st.dataframe(corr_df.head(5), use_container_width=True)
+        
+        with col_insight2:
+            # Data quality check
+            st.markdown("#### 🎯 Data Quality")
+            
+            total_cells = df.size
+            null_cells = df.isnull().sum().sum()
+            null_percentage = (null_cells / total_cells * 100) if total_cells > 0 else 0
+            
+            col_q1, col_q2 = st.columns(2)
+            with col_q1:
+                st.metric("Null Values", f"{null_percentage:.1f}%")
+            with col_q2:
+                st.metric("Duplicate Rows", f"{df.duplicated().sum()}")
+        
+        # Heatmap
+        st.markdown("#### 🔥 Correlation Heatmap")
         numeric_df = df.select_dtypes(include=[np.number])
         if len(numeric_df.columns) > 1:
             corr_matrix = numeric_df.corr()
@@ -274,50 +441,63 @@ if selected_display:
                 x=corr_matrix.columns,
                 y=corr_matrix.columns,
                 colorscale='RdBu',
-                zmid=0
+                zmid=0,
+                hoverongaps=False,
+                text=np.round(corr_matrix.values, 2),
+                texttemplate="%{text}"
             ))
             
-            fig.update_layout(title="Correlation Heatmap", height=400)
+            fig.update_layout(
+                title="Correlation Heatmap",
+                height=500,
+                xaxis_title="Features",
+                yaxis_title="Features"
+            )
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Need at least 2 numeric columns for correlation heatmap")
     
     with tab3:
         st.markdown("### 📊 Statistical Summary")
         
+        # Basic statistics
         st.dataframe(df.describe(), use_container_width=True)
         
-        st.markdown("#### Data Types")
+        # Data types and info
+        st.markdown("#### 📋 Data Types & Information")
         info_df = pd.DataFrame({
             'Column': df.columns,
-            'Type': df.dtypes.astype(str),
+            'Data Type': df.dtypes.astype(str),
             'Non-Null': df.count().values,
-            'Unique': df.nunique().values
+            'Unique Values': df.nunique().values,
+            'Null %': (df.isnull().sum().values / len(df) * 100).round(2)
         })
-        st.dataframe(info_df, use_container_width=True)
-    
-    # Export options
-    st.markdown("---")
-    st.markdown("### 📥 Export Data")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        csv = df.to_csv(index=False)
-        st.download_button(
-            label="📄 Download as CSV",
-            data=csv,
-            file_name=f"{dataset_name.split('.')[0]}_analytics.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-    
-    with col2:
-        json_data = df.head(50).to_json(orient='records', indent=2)
-        st.download_button(
-            label="📊 Download as JSON",
-            data=json_data,
-            file_name=f"{dataset_name.split('.')[0]}_analytics.json",
-            mime="application/json",
-            use_container_width=True
-        )
+        st.dataframe(info_df, use_container_width=True, hide_index=True)
+        
+        # Value distributions for categorical columns
+        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+        if categorical_cols:
+            st.markdown("#### 📊 Categorical Distributions")
+            selected_cat = st.selectbox("Select categorical column to analyze:", categorical_cols)
+            
+            if selected_cat:
+                value_counts = df[selected_cat].value_counts().reset_index()
+                value_counts.columns = [selected_cat, 'Count']
+                value_counts['Percentage'] = (value_counts['Count'] / len(df) * 100).round(1)
+                
+                col_dist1, col_dist2 = st.columns([2, 1])
+                
+                with col_dist1:
+                    # Bar chart
+                    fig = px.bar(value_counts.head(10), 
+                                x=selected_cat, y='Count',
+                                title=f"Top 10 {selected_cat} values",
+                                color_discrete_sequence=['#FFD700'])
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col_dist2:
+                    # Table
+                    st.dataframe(value_counts.head(10), use_container_width=True)
 
 st.markdown("---")
 st.caption(f"📊 Analytics • {len(datasets)} datasets available • {datetime.now().strftime('%H:%M:%S')}")
