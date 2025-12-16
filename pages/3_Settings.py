@@ -15,7 +15,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 try:
     from frontend.components.theme import WarehouseTheme
     from frontend.components.sidebar import render_sidebar
-    from frontend.utils.config import BACKEND_URL, TIMEOUT
+    from frontend.utils.config import BACKEND_URL, TIMEOUT, SUPABASE_CREDS
 except ImportError:
     class WarehouseTheme:
         @staticmethod
@@ -28,6 +28,7 @@ except ImportError:
 
     BACKEND_URL = "http://localhost:8000/api/v1"
     TIMEOUT = 30
+    SUPABASE_CREDS = {'available': False, 'url': '', 'key': ''}
 
 # --------------------------------------------------
 # Apply Theme (IMPORTANT - do this early)
@@ -62,27 +63,37 @@ if 'access_token' not in st.session_state:
     st.session_state.access_token = "demo_token_12345"
 
 # --------------------------------------------------
-# Helper: Auth Headers - Simplified
-# --------------------------------------------------
-def auth_headers():
-    # Return empty headers for now (or basic auth if needed)
-    return {}
-
-# --------------------------------------------------
-# Helper: Fetch datasets from backend
+# Helper: Fetch datasets from Supabase
 # --------------------------------------------------
 def fetch_datasets():
+    """Fetch datasets from Supabase"""
     try:
-        res = requests.get(
-            f"{BACKEND_URL}/data/list",
-            headers=auth_headers(),
-            timeout=TIMEOUT
-        )
-        res.raise_for_status()
-        payload = res.json()
-        return payload.get("data", [])
+        if SUPABASE_CREDS.get('available'):
+            headers = {
+                'apikey': SUPABASE_CREDS['key'],
+                'Authorization': f'Bearer {SUPABASE_CREDS["key"]}'
+            }
+            
+            response = requests.get(
+                f"{SUPABASE_CREDS['url']}/rest/v1/datasets",
+                headers=headers,
+                params={'select': '*'},
+                timeout=TIMEOUT
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return []
+        else:
+            # Fallback to original backend
+            response = requests.get(f"{BACKEND_URL}/data/list", timeout=TIMEOUT)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('datasets', [])
+                
     except Exception as e:
-        st.error(f"Failed to fetch datasets: {e}")
+        st.error(f"Failed to fetch datasets: {str(e)[:100]}")
         return []
 
 # --------------------------------------------------
@@ -133,24 +144,46 @@ st.markdown("---")
 st.markdown("### 🔗 Backend Status")
 
 try:
-    res = requests.get(
-        f"{BACKEND_URL}/data/list",
-        headers=auth_headers(),
-        timeout=5
-    )
-
-    if res.status_code == 200:
-        payload = res.json()
-        count = payload.get("count", 0)
-        st.success(f"✅ Backend connected: {count} datasets")
-
-        with st.expander("Backend Details"):
-            st.json(payload)
+    if SUPABASE_CREDS.get('available'):
+        headers = {
+            'apikey': SUPABASE_CREDS['key'],
+            'Authorization': f'Bearer {SUPABASE_CREDS["key"]}'
+        }
+        
+        response = requests.get(
+            f"{SUPABASE_CREDS['url']}/rest/v1/datasets",
+            headers=headers,
+            params={'select': 'count'},
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            datasets = fetch_datasets()
+            st.success(f"✅ Supabase connected: {len(datasets)} datasets")
+            
+            with st.expander("Supabase Details"):
+                info = {
+                    "url": SUPABASE_CREDS['url'],
+                    "status": "Connected",
+                    "datasets_count": len(datasets),
+                    "credentials_source": SUPABASE_CREDS.get('source', 'unknown')
+                }
+                st.json(info)
+                
+                # Show first few datasets
+                if datasets:
+                    st.markdown("**Recent datasets:**")
+                    for dataset in datasets[:3]:
+                        st.write(f"- {dataset.get('filename', 'Unknown')} ({dataset.get('rows', 0)} rows)")
+        else:
+            st.warning(f"⚠️ Supabase error: {response.status_code}")
+            
     else:
-        st.warning(f"⚠️ Backend error: {res.status_code}")
+        st.warning("⚠️ Supabase not configured")
+        st.info("Add SUPABASE_URL and SUPABASE_KEY to .streamlit/secrets.toml")
 
 except Exception as e:
-    st.error(f"❌ Backend not reachable: {str(e)}")
+    st.error(f"❌ Connection error: {str(e)[:100]}")
 
 st.markdown("---")
 
@@ -186,19 +219,19 @@ with col1:
         )
 
 with col2:
-    # Notification settings - THIS WAS MISSING
+    # Notification settings
     notifications = st.checkbox(
         "Enable notifications",
         value=st.session_state.app_settings["notifications"]
     )
     
-    # Email alerts - Additional setting
+    # Email alerts
     email_alerts = st.checkbox(
         "Email alerts for critical events",
         value=st.session_state.app_settings.get("email_alerts", False)
     )
 
-    # Max file size - THIS WAS MISSING
+    # Max file size
     max_file_size = st.slider(
         "Max file upload size (MB)",
         1, 100, st.session_state.app_settings["max_file_size"]
@@ -236,15 +269,23 @@ with col2:
 
 with col3:
     if st.button("📋 Export Logs", use_container_width=True):
+        # Get datasets count
+        datasets = fetch_datasets()
+        
         log_data = {
             "timestamp": datetime.now().isoformat(),
             "user": st.session_state.user_email,
             "settings": st.session_state.app_settings,
-            "datasets_count": st.session_state.get("total_files", 0),
+            "datasets_count": len(datasets),
             "system_info": {
                 "python_version": sys.version,
                 "platform": sys.platform,
                 "streamlit_version": st.__version__
+            },
+            "supabase_status": {
+                "available": SUPABASE_CREDS.get('available', False),
+                "source": SUPABASE_CREDS.get('source', 'none'),
+                "url": SUPABASE_CREDS.get('url', '')
             }
         }
 
@@ -260,9 +301,9 @@ with col3:
 st.markdown("---")
 
 # --------------------------------------------------
-# Additional Settings
+# Advanced Settings
 # --------------------------------------------------
-with st.expander("⚙️ Advanced Settings"):
+with st.expander("⚙️ Advanced Settings", expanded=False):
     st.markdown("### Advanced Configuration")
     
     col1, col2 = st.columns(2)
@@ -291,6 +332,32 @@ with st.expander("⚙️ Advanced Settings"):
             "Enable usage analytics",
             value=True
         )
+    
+    # Connection test
+    st.markdown("### 🔌 Connection Test")
+    if st.button("Test Supabase Connection"):
+        try:
+            if SUPABASE_CREDS.get('available'):
+                headers = {
+                    'apikey': SUPABASE_CREDS['key'],
+                    'Authorization': f'Bearer {SUPABASE_CREDS["key"]}'
+                }
+                
+                response = requests.get(
+                    f"{SUPABASE_CREDS['url']}/rest/v1/",
+                    headers=headers,
+                    timeout=5
+                )
+                
+                if response.status_code == 200:
+                    st.success("✅ Supabase connection successful!")
+                else:
+                    st.error(f"❌ Supabase error: {response.status_code}")
+            else:
+                st.warning("⚠️ Supabase not configured")
+                
+        except Exception as e:
+            st.error(f"❌ Connection failed: {str(e)[:100]}")
     
     # Danger zone
     st.markdown("### ⚠️ Danger Zone")
@@ -365,15 +432,29 @@ if st.button("💾 Save All Settings", type="primary", use_container_width=True)
 # --------------------------------------------------
 # Current Settings Display
 # --------------------------------------------------
-with st.expander("📋 Current Settings Summary"):
+with st.expander("📋 Current Settings Summary", expanded=False):
     st.markdown("### Current Configuration")
     
-    # Display current settings in a nice format
+    # Display current settings
     settings_df = pd.DataFrame(
         [(k.replace('_', ' ').title(), v) for k, v in st.session_state.app_settings.items()],
         columns=["Setting", "Value"]
     )
     st.dataframe(settings_df, use_container_width=True, hide_index=True)
+    
+    # System info
+    st.markdown("### System Information")
+    system_info = {
+        "User": st.session_state.user_email,
+        "Python Version": sys.version.split()[0],
+        "Streamlit Version": st.__version__,
+        "Platform": sys.platform,
+        "Supabase Configured": SUPABASE_CREDS.get('available', False),
+        "Total Datasets": st.session_state.get('total_files', 0)
+    }
+    
+    for key, value in system_info.items():
+        st.write(f"**{key}:** {value}")
 
 st.markdown("---")
 st.caption(
