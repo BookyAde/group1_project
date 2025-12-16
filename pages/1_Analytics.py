@@ -160,7 +160,8 @@ def fetch_dataset_data(dataset_id, limit=100):
         'Date': dates,
         'Sales': np.random.normal(10000, 2000, limit),
         'Quantity': np.random.randint(50, 200, limit),
-        'Region': np.random.choice(['North', 'South', 'East', 'West'], limit)
+        'Region': np.random.choice(['North', 'South', 'East', 'West'], limit),
+        'Price': np.random.uniform(10, 100, limit)  # Added for scatter plot testing
     })
 
 # Load datasets
@@ -228,7 +229,7 @@ if selected_display:
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             st.metric("Numeric Columns", len(numeric_cols))
     
-       # Visualization tabs
+    # Visualization tabs
     tab1, tab2, tab3 = st.tabs(["📈 Charts", "🔍 Insights", "📊 Statistics"])
     
     with tab1:
@@ -269,15 +270,14 @@ if selected_display:
                 if not numeric_cols:
                     st.warning("No numeric columns found for bar chart")
         
-                elif chart_type == "Scatter Plot":
-                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        elif chart_type == "Scatter Plot":
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             
             if len(numeric_cols) >= 2:
                 col1, col2 = st.columns(2)
                 with col1:
                     x_col = st.selectbox("X-axis:", numeric_cols, key='scatter_x')
                 with col2:
-                    # Filter y_col options to exclude the selected x_col
                     y_options = [col for col in numeric_cols if col != x_col]
                     y_col = st.selectbox("Y-axis:", y_options, key='scatter_y')
                 
@@ -363,25 +363,35 @@ if selected_display:
             if numeric_cols:
                 col1, col2 = st.columns(2)
                 with col1:
-                    box_col = st.selectbox("Value column:", numeric_cols)
+                    box_col = st.selectbox("Value column:", numeric_cols, key='box_value')
                 
                 # Optional grouping
                 group_col = None
                 if categorical_cols:
                     with col2:
-                        group_col = st.selectbox("Group by (optional):", ['None'] + categorical_cols)
+                        group_options = ['None'] + [c for c in categorical_cols if c != box_col]
+                        group_col = st.selectbox("Group by (optional):", group_options, key='box_group')
                         if group_col == 'None':
                             group_col = None
                 
-                if group_col:
-                    fig = px.box(df, x=group_col, y=box_col, 
-                                title=f"{box_col} by {group_col}",
-                                color=group_col)
-                else:
-                    fig = px.box(df, y=box_col, title=f"Distribution of {box_col}")
-                
-                fig.update_traces(marker_color='#FFD700')
-                st.plotly_chart(fig, use_container_width=True)
+                try:
+                    if group_col:
+                        fig = px.box(df, x=group_col, y=box_col, 
+                                    title=f"{box_col} by {group_col}",
+                                    color=group_col)
+                    else:
+                        fig = px.box(df, y=box_col, title=f"Distribution of {box_col}")
+                        fig.update_traces(marker_color='#FFD700')
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as box_error:
+                    st.error(f"Error creating box plot: {str(box_error)[:100]}")
+                    
+                    # Simple box plot fallback
+                    fig = go.Figure()
+                    fig.add_trace(go.Box(y=df[box_col], name=box_col, marker_color='#FFD700'))
+                    fig.update_layout(title=f"Distribution of {box_col}")
+                    st.plotly_chart(fig, use_container_width=True)
             else:
                 st.warning("No numeric columns found for box plot")
         
@@ -518,6 +528,32 @@ if selected_display:
                 with col_dist2:
                     # Table
                     st.dataframe(value_counts.head(10), use_container_width=True)
+
+# Export options
+st.markdown("---")
+st.markdown("### 📥 Export Data")
+
+if selected_display:
+    col1, col2 = st.columns(2)
+    with col1:
+        csv = df.to_csv(index=False)
+        st.download_button(
+            label="📄 Download as CSV",
+            data=csv,
+            file_name=f"{dataset_name.split('.')[0]}_analytics.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+    
+    with col2:
+        json_data = df.head(50).to_json(orient='records', indent=2)
+        st.download_button(
+            label="📊 Download as JSON",
+            data=json_data,
+            file_name=f"{dataset_name.split('.')[0]}_analytics.json",
+            mime="application/json",
+            use_container_width=True
+        )
 
 st.markdown("---")
 st.caption(f"📊 Analytics • {len(datasets)} datasets available • {datetime.now().strftime('%H:%M:%S')}")
