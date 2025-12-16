@@ -9,11 +9,12 @@ import os
 import requests
 import time
 import json
+import uuid
 
 # Apply theme
 try:
     from frontend.components.theme import WarehouseTheme
-    WarehouseTheme.apply_theme()  # This will use the current theme from session state
+    WarehouseTheme.apply_theme()
 except:
     pass
 
@@ -22,7 +23,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 try:
     from frontend.components.theme import WarehouseTheme
     from frontend.components.sidebar import render_sidebar
-    from frontend.utils.config import BACKEND_URL, TIMEOUT
+    from frontend.utils.config import BACKEND_URL, TIMEOUT, SUPABASE_CREDS
 except ImportError:
     class WarehouseTheme:
         @staticmethod
@@ -32,6 +33,7 @@ except ImportError:
             st.write("🔄 ETL Monitor")
     BACKEND_URL = "http://localhost:8000/api/v1"
     TIMEOUT = 30
+    SUPABASE_CREDS = {'available': False, 'url': '', 'key': ''}
 
 st.set_page_config(
     page_title="ETL Monitor - Data Warehouse",
@@ -49,55 +51,102 @@ except:
     pass
 
 # --------------------------------------------------
-# Helper Functions
+# Helper Functions for Supabase
 # --------------------------------------------------
-def fetch_etl_jobs():
-    """Fetch ETL job history from backend"""
+def fetch_datasets_from_supabase():
+    """Fetch datasets from Supabase for ETL sources"""
     try:
-        response = requests.get(f"{BACKEND_URL}/etl/jobs", timeout=TIMEOUT)
-        if response.status_code == 200:
-            return response.json().get('jobs', [])
+        if SUPABASE_CREDS.get('available'):
+            headers = {
+                'apikey': SUPABASE_CREDS['key'],
+                'Authorization': f'Bearer {SUPABASE_CREDS["key"]}'
+            }
+            
+            response = requests.get(
+                f"{SUPABASE_CREDS['url']}/rest/v1/datasets",
+                headers=headers,
+                params={'select': '*', 'order': 'uploaded_at.desc'},
+                timeout=TIMEOUT
+            )
+            
+            if response.status_code == 200:
+                return response.json()
     except Exception as e:
-        # Fallback to session state if backend not available
-        return st.session_state.get('etl_jobs', [])
+        st.error(f"Error fetching datasets: {str(e)[:100]}")
     return []
 
-def fetch_etl_metrics():
-    """Fetch ETL performance metrics from backend"""
-    try:
-        response = requests.get(f"{BACKEND_URL}/etl/metrics", timeout=TIMEOUT)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        pass
-    return {}
+def simulate_etl_job(pipeline_type, sources=None):
+    """Simulate ETL job for demo"""
+    job_id = f"ETL-{str(uuid.uuid4())[:8]}"
+    
+    job = {
+        'id': job_id,
+        'name': f'{pipeline_type.title()} Pipeline',
+        'type': pipeline_type,
+        'status': 'running',
+        'progress': 10,
+        'started': datetime.now().isoformat(),
+        'sources': sources or [],
+        'triggered_by': st.session_state.user_email,
+        'rows_processed': 0,
+        'estimated_completion': (datetime.now() + timedelta(minutes=5)).isoformat()
+    }
+    
+    # Add to session state
+    if 'etl_jobs' not in st.session_state:
+        st.session_state.etl_jobs = []
+    st.session_state.etl_jobs.append(job)
+    
+    return job_id
 
-def fetch_recent_errors():
-    """Fetch recent ETL errors from backend"""
-    try:
-        response = requests.get(f"{BACKEND_URL}/etl/errors", timeout=TIMEOUT)
-        if response.status_code == 200:
-            return response.json().get('errors', [])
-    except:
-        pass
-    return []
+def get_etl_jobs():
+    """Get ETL jobs from session state"""
+    return st.session_state.get('etl_jobs', [])
 
-def run_etl_pipeline(pipeline_type, sources=None):
-    """Trigger ETL pipeline execution"""
-    try:
-        payload = {
-            'pipeline_type': pipeline_type,
-            'sources': sources or [],
-            'triggered_by': st.session_state.user_email
-        }
-        response = requests.post(
-            f"{BACKEND_URL}/etl/run", 
-            json=payload,
-            timeout=TIMEOUT
-        )
-        return response.status_code == 200, response.json() if response.status_code == 200 else {}
-    except Exception as e:
-        return False, {'error': str(e)}
+def get_etl_metrics():
+    """Generate demo ETL metrics"""
+    jobs = st.session_state.get('etl_jobs', [])
+    
+    completed = sum(1 for j in jobs if j.get('status') == 'completed')
+    failed = sum(1 for j in jobs if j.get('status') == 'failed')
+    running = sum(1 for j in jobs if j.get('status') == 'running')
+    total = len(jobs)
+    
+    success_rate = (completed / total * 100) if total > 0 else 100
+    
+    # Calculate data volume based on jobs
+    data_volume = sum(j.get('rows_processed', 0) * 0.000001 for j in jobs)  # Approx GB
+    
+    return {
+        'jobs_today': total,
+        'success_rate': round(success_rate, 1),
+        'avg_processing_minutes': 3.5,
+        'data_volume_gb': round(data_volume, 2),
+        'active_jobs': running,
+        'completed_jobs': completed,
+        'failed_jobs': failed
+    }
+
+def simulate_job_progress():
+    """Simulate progress for running jobs"""
+    if 'etl_jobs' in st.session_state:
+        for job in st.session_state.etl_jobs:
+            if job.get('status') == 'running' and job.get('progress', 0) < 100:
+                # Increment progress
+                increment = np.random.randint(5, 25)
+                job['progress'] = min(100, job.get('progress', 0) + increment)
+                
+                # Add rows processed
+                if 'rows_processed' not in job:
+                    job['rows_processed'] = 0
+                job['rows_processed'] += increment * 100
+                
+                # Complete if reached 100%
+                if job['progress'] == 100:
+                    job['status'] = 'completed'
+                    job['completed_at'] = datetime.now().isoformat()
+                    # Ensure rows_processed is realistic
+                    job['rows_processed'] = np.random.randint(5000, 50000)
 
 # --------------------------------------------------
 # Initialize session state
@@ -144,13 +193,14 @@ with col_refresh1:
     auto_refresh = st.checkbox("🔄 Enable auto-refresh (30 seconds)", value=False)
 with col_refresh2:
     if st.button("🔄 Refresh Now", use_container_width=True):
+        simulate_job_progress()
         st.rerun()
 with col_refresh3:
     last_refresh = st.empty()
 
-# Dashboard metrics - using real data when available
+# Dashboard metrics
 try:
-    etl_metrics = fetch_etl_metrics()
+    etl_metrics = get_etl_metrics()
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -160,16 +210,16 @@ try:
         st.metric("Jobs Today", f"{jobs_today}", f"{success_rate}% success")
     
     with col2:
-        active_jobs = len([j for j in fetch_etl_jobs() if j.get('status') in ['running', 'queued']])
-        st.metric("Active Jobs", f"{active_jobs}", "running/queued")
+        active_jobs = etl_metrics.get('active_jobs', 0)
+        st.metric("Active Jobs", f"{active_jobs}", "running")
     
     with col3:
-        avg_time = etl_metrics.get('avg_processing_minutes', 5.2)
+        avg_time = etl_metrics.get('avg_processing_minutes', 3.5)
         st.metric("Avg Process Time", f"{avg_time:.1f}m", "per job")
     
     with col4:
         data_volume = etl_metrics.get('data_volume_gb', 0)
-        st.metric("Data Processed", f"{data_volume:.1f} GB", "today")
+        st.metric("Data Processed", f"{data_volume:.2f} GB", "total")
         
 except Exception as e:
     st.warning(f"Could not load dashboard metrics: {e}")
@@ -186,36 +236,51 @@ control_tab1, control_tab2, control_tab3 = st.tabs(["Quick Actions", "Pipeline C
 with control_tab1:
     st.markdown("### Quick Pipeline Execution")
     
-    col_q1, col_q2, col_q3 = st.columns(3)
+    col_q1, col_q2, col_q3, col_q4 = st.columns(4)
     
     with col_q1:
         if st.button("▶️ Run Full Pipeline", use_container_width=True, type="primary"):
-            with st.spinner("Starting full ETL pipeline..."):
-                success, result = run_etl_pipeline('full')
-                if success:
-                    st.success("✅ Full pipeline started successfully!")
-                    job_id = result.get('job_id', 'Unknown')
-                    st.info(f"Job ID: {job_id}")
-                else:
-                    st.error(f"Failed to start pipeline: {result.get('error', 'Unknown error')}")
+            datasets = fetch_datasets_from_supabase()
+            source_names = [d.get('filename') for d in datasets[:3]] if datasets else ["Sample Data"]
+            
+            job_id = simulate_etl_job('full', source_names)
+            st.success("✅ Full pipeline simulation started!")
+            st.info(f"Processing {len(source_names)} datasets")
+            st.rerun()
     
     with col_q2:
-        if st.button("🔄 Run Incremental Update", use_container_width=True):
-            with st.spinner("Starting incremental update..."):
-                success, result = run_etl_pipeline('incremental')
-                if success:
-                    st.success("✅ Incremental update started!")
-                else:
-                    st.error(f"Failed: {result.get('error', 'Unknown error')}")
+        if st.button("🔄 Incremental Update", use_container_width=True):
+            job_id = simulate_etl_job('incremental', ['Recent Data Updates'])
+            st.success("✅ Incremental update started!")
+            st.rerun()
     
     with col_q3:
-        if st.button("🧹 Run Data Cleanup", use_container_width=True):
-            with st.spinner("Starting data cleanup..."):
-                success, result = run_etl_pipeline('cleanup')
-                if success:
-                    st.success("✅ Data cleanup started!")
-                else:
-                    st.error(f"Failed: {result.get('error', 'Unknown error')}")
+        if st.button("🧹 Data Cleanup", use_container_width=True):
+            job_id = simulate_etl_job('cleanup', ['All Datasets'])
+            st.success("✅ Data cleanup started!")
+            st.rerun()
+    
+    with col_q4:
+        if st.button("🎲 Demo Data", use_container_width=True):
+            # Create demo ETL jobs
+            demo_jobs = [
+                {
+                    'id': f'ETL-DEMO-{i}',
+                    'name': f'Demo Pipeline {i}',
+                    'type': ['full', 'incremental', 'cleanup'][i % 3],
+                    'status': ['completed', 'failed', 'running'][i % 3],
+                    'progress': [100, 45, 75][i % 3],
+                    'started': (datetime.now() - timedelta(hours=i)).isoformat(),
+                    'sources': ['sales_data.csv', 'user_logs.xlsx'][:i % 2 + 1],
+                    'rows_processed': i * 10000,
+                    'triggered_by': 'demo'
+                }
+                for i in range(1, 6)
+            ]
+            
+            st.session_state.etl_jobs = demo_jobs
+            st.success("✅ Generated 5 demo ETL jobs")
+            st.rerun()
 
 with control_tab2:
     st.markdown("### Pipeline Configuration")
@@ -272,35 +337,47 @@ with control_tab2:
 with control_tab3:
     st.markdown("### Data Source Management")
     
-    # Fetch available datasets
-    try:
-        datasets_response = requests.get(f"{BACKEND_URL}/data/list", timeout=TIMEOUT)
-        if datasets_response.status_code == 200:
-            datasets = datasets_response.json().get('datasets', [])
+    # Fetch datasets from Supabase
+    with st.spinner("Loading data sources from Supabase..."):
+        datasets = fetch_datasets_from_supabase()
+    
+    if datasets:
+        st.success(f"✅ Found {len(datasets)} datasets in Supabase")
+        
+        source_options = {d.get('filename', f"Dataset {d.get('id')}"): d.get('id') for d in datasets}
+        
+        selected_sources = st.multiselect(
+            "Select data sources for ETL",
+            list(source_options.keys()),
+            default=list(source_options.keys())[:min(2, len(source_options))] if source_options else []
+        )
+        
+        # Display selected sources
+        if selected_sources:
+            with st.expander("📋 Selected Sources", expanded=False):
+                for source in selected_sources:
+                    source_id = source_options[source]
+                    source_data = next((d for d in datasets if d.get('id') == source_id), {})
+                    st.markdown(f"**{source}**")
+                    st.caption(f"Rows: {source_data.get('rows', 'N/A')} | Size: {source_data.get('size_mb', 'N/A')} MB | Uploaded: {source_data.get('uploaded_at', 'N/A')[:10]}")
+        
+        # ETL action for selected sources
+        if selected_sources and st.button("🔄 Process Selected Sources", use_container_width=True, type="primary"):
+            job_id = simulate_etl_job('selected', selected_sources)
+            st.success(f"✅ Started ETL job for {len(selected_sources)} datasets")
+            st.rerun()
             
-            if datasets:
-                source_options = {d['filename']: d['id'] for d in datasets}
-                
-                selected_sources = st.multiselect(
-                    "Select data sources for ETL",
-                    list(source_options.keys()),
-                    default=list(source_options.keys())[:2] if source_options else []
-                )
-                
-                # Display source details
-                if selected_sources:
-                    with st.expander("Selected Source Details", expanded=False):
-                        for source in selected_sources:
-                            source_id = source_options[source]
-                            source_data = next((d for d in datasets if d['id'] == source_id), {})
-                            st.markdown(f"**{source}**")
-                            st.caption(f"Rows: {source_data.get('rows', 'N/A')} | Size: {source_data.get('size_mb', 'N/A')} MB")
-            else:
-                st.info("No datasets found. Upload data in the Data Management page first.")
-        else:
-            st.warning("Could not fetch data sources from backend")
-    except Exception as e:
-        st.error(f"Error loading data sources: {e}")
+    else:
+        st.info("No datasets found in Supabase")
+        st.markdown("""
+        **To add data sources:**
+        1. Go to **📁 Data Management** page
+        2. Upload CSV/Excel files
+        3. They will appear here as ETL sources
+        """)
+        
+        if st.button("📁 Go to Data Management", use_container_width=True):
+            st.switch_page("pages/2_Data.py")
 
 st.markdown("---")
 
@@ -309,11 +386,17 @@ st.markdown("---")
 # --------------------------------------------------
 st.markdown("## ⚡ Job Execution History")
 
-# Fetch real ETL jobs
-etl_jobs = fetch_etl_jobs()
+# Fetch ETL jobs
+etl_jobs = get_etl_jobs()
 
 if not etl_jobs:
-    st.info("No ETL jobs found in history. Run a pipeline to see execution details.")
+    st.info("No ETL jobs found. Run a pipeline to see execution details.")
+    st.markdown("""
+    **Try these actions:**
+    - Click **▶️ Run Full Pipeline** to start a demo job
+    - Click **🎲 Demo Data** to generate sample ETL jobs
+    - Upload datasets first, then process them
+    """)
 else:
     # Filter options
     filter_col1, filter_col2, filter_col3 = st.columns(3)
@@ -325,16 +408,15 @@ else:
         )
     
     with filter_col2:
-        date_filter = st.date_input(
-            "Filter by date",
-            value=datetime.now().date()
+        job_type_filter = st.selectbox(
+            "Filter by type",
+            ["All", "Full", "Incremental", "Cleanup", "Selected"]
         )
     
     with filter_col3:
-        job_type_filter = st.selectbox(
-            "Filter by type",
-            ["All", "Full", "Incremental", "Cleanup", "Validation"]
-        )
+        if st.button("🔄 Update Progress", use_container_width=True):
+            simulate_job_progress()
+            st.rerun()
     
     # Filter jobs
     filtered_jobs = etl_jobs
@@ -363,9 +445,15 @@ else:
             
             with col2:
                 st.markdown(f"**{job.get('name', 'Unnamed Job')}**")
-                if job.get('description'):
-                    st.caption(job.get('description'))
-                st.caption(f"Started: {job.get('started', 'N/A')}")
+                if job.get('sources'):
+                    st.caption(f"Sources: {', '.join(job.get('sources', [])[:2])}{'...' if len(job.get('sources', [])) > 2 else ''}")
+                
+                # Format time
+                started = job.get('started', '')
+                if started and 'T' in started:
+                    time_part = started.split('T')[1][:5]
+                    date_part = started.split('T')[0]
+                    st.caption(f"Started: {date_part} {time_part}")
             
             with col3:
                 status = job.get('status', 'unknown').title()
@@ -378,31 +466,38 @@ else:
                 st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>{status}</span>", unsafe_allow_html=True)
             
             with col4:
-                if job.get('progress') is not None:
-                    progress = job.get('progress', 0)
-                    st.progress(progress / 100, text=f"{progress}%")
-                else:
-                    st.caption("No progress data")
+                progress = job.get('progress', 0)
+                st.progress(progress / 100, text=f"{progress}%")
             
             with col5:
-                # Duration info
-                if job.get('duration'):
-                    st.caption(f"Duration: {job.get('duration')}")
+                # Job info
                 if job.get('rows_processed'):
                     st.caption(f"Rows: {job.get('rows_processed'):,}")
+                if job.get('type'):
+                    st.caption(f"Type: {job.get('type').title()}")
             
             with col6:
-                # Action buttons based on status
+                # Action buttons
                 if job.get('status', '').lower() == 'running':
-                    if st.button("⏸️", key=f"pause_{job.get('id')}", help="Pause job"):
-                        st.warning("Pause functionality coming soon")
+                    if st.button("✅", key=f"complete_{job.get('id')}", help="Mark complete"):
+                        for j in st.session_state.etl_jobs:
+                            if j.get('id') == job.get('id'):
+                                j['status'] = 'completed'
+                                j['progress'] = 100
+                                break
+                        st.rerun()
                 elif job.get('status', '').lower() == 'failed':
                     if st.button("🔄", key=f"retry_{job.get('id')}", help="Retry job"):
-                        st.info(f"Retrying job {job.get('id')}")
+                        new_job = job.copy()
+                        new_job['status'] = 'running'
+                        new_job['progress'] = 10
+                        new_job['started'] = datetime.now().isoformat()
+                        st.session_state.etl_jobs.append(new_job)
+                        st.rerun()
                 elif job.get('status', '').lower() == 'completed':
-                    if st.button("📊", key=f"report_{job.get('id')}", help="View report"):
-                        with st.expander(f"Job Report: {job.get('id')}", expanded=False):
-                            st.json(job)
+                    if st.button("🗑️", key=f"remove_{job.get('id')}", help="Remove"):
+                        st.session_state.etl_jobs = [j for j in st.session_state.etl_jobs if j.get('id') != job.get('id')]
+                        st.rerun()
             
             st.markdown("---")
 
@@ -411,55 +506,55 @@ else:
 # --------------------------------------------------
 st.markdown("## 📈 Performance Analytics")
 
-# Try to get real metrics, fall back to simulated if needed
-metrics_data = fetch_etl_metrics()
+# Get metrics
+metrics_data = get_etl_metrics()
 
-if metrics_data:
-    # Real metrics available
+if st.session_state.etl_jobs:
     analytic_col1, analytic_col2 = st.columns(2)
     
     with analytic_col1:
-        # Success rate over time chart
-        if 'daily_success' in metrics_data:
-            days = list(metrics_data['daily_success'].keys())[-7:]  # Last 7 days
-            success_rates = [metrics_data['daily_success'][d] for d in days]
-            
-            fig1 = go.Figure()
-            fig1.add_trace(go.Scatter(
-                x=days,
-                y=success_rates,
-                mode='lines+markers',
-                name='Success Rate',
-                line=dict(color='#28A745', width=3)
-            ))
+        # Success rate chart
+        jobs_by_status = {}
+        for job in st.session_state.etl_jobs:
+            status = job.get('status', 'unknown').title()
+            jobs_by_status[status] = jobs_by_status.get(status, 0) + 1
+        
+        if jobs_by_status:
+            fig1 = go.Figure(data=[
+                go.Pie(
+                    labels=list(jobs_by_status.keys()),
+                    values=list(jobs_by_status.values()),
+                    hole=.3,
+                    marker_colors=['#28A745', '#17A2B8', '#DC3545', '#FFC107']
+                )
+            ])
             fig1.update_layout(
-                title="Daily Success Rate (7 days)",
-                height=300,
-                yaxis=dict(range=[0, 100], ticksuffix="%")
+                title="Job Status Distribution",
+                height=300
             )
             st.plotly_chart(fig1, use_container_width=True)
     
     with analytic_col2:
         # Processing time trend
-        if 'processing_times' in metrics_data:
-            jobs = list(metrics_data['processing_times'].keys())[-10:]  # Last 10 jobs
-            times = [metrics_data['processing_times'][j] for j in jobs]
-            
-            fig2 = go.Figure()
-            fig2.add_trace(go.Bar(
-                x=jobs,
-                y=times,
-                name='Processing Time',
-                marker_color='#FFD700'
-            ))
-            fig2.update_layout(
-                title="Recent Job Processing Times",
-                height=300,
-                yaxis_title="Minutes"
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+        recent_jobs = st.session_state.etl_jobs[-min(8, len(st.session_state.etl_jobs)):]
+        job_names = [j.get('id')[:8] for j in recent_jobs]
+        progress_values = [j.get('progress', 0) for j in recent_jobs]
+        
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(
+            x=job_names,
+            y=progress_values,
+            name='Progress %',
+            marker_color='#FFD700'
+        ))
+        fig2.update_layout(
+            title="Recent Job Progress",
+            height=300,
+            yaxis_title="Progress %",
+            yaxis=dict(range=[0, 100])
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 else:
-    # Simulated metrics (fallback)
     st.info("Performance analytics will appear here once ETL jobs have been run.")
     
     # Create sample chart
@@ -489,48 +584,38 @@ st.markdown("---")
 # --------------------------------------------------
 st.markdown("## ⚠️ Error & Alert Center")
 
-# Fetch recent errors
-recent_errors = fetch_recent_errors()
+# Get failed jobs
+failed_jobs = [j for j in st.session_state.get('etl_jobs', []) if j.get('status') == 'failed']
 
-if recent_errors:
-    error_count = len(recent_errors)
-    st.warning(f"Found {error_count} error(s) in recent jobs")
+if failed_jobs:
+    error_count = len(failed_jobs)
+    st.warning(f"Found {error_count} failed job(s)")
     
-    # Show latest errors
-    for error in recent_errors[:3]:  # Show top 3
-        with st.expander(f"❌ {error.get('job_id', 'Unknown')} - {error.get('timestamp', '')}", expanded=False):
-            st.error(f"**Error:** {error.get('message', 'No error message')}")
+    # Show failed jobs
+    for job in failed_jobs[:3]:
+        with st.expander(f"❌ {job.get('id', 'Unknown')} - {job.get('name', 'Unknown Job')}", expanded=False):
+            st.error(f"**Job failed at {job.get('progress', 0)}% progress**")
             
-            # Error details
-            if error.get('details'):
-                st.code(error.get('details'), language='python')
+            st.caption(f"Type: {job.get('type', 'Unknown')}")
+            st.caption(f"Started: {job.get('started', 'Unknown')}")
             
-            # Error metadata
-            col_e1, col_e2 = st.columns(2)
-            with col_e1:
-                st.caption(f"Severity: {error.get('severity', 'Unknown')}")
-                st.caption(f"Module: {error.get('module', 'Unknown')}")
-            with col_e2:
-                st.caption(f"Retry count: {error.get('retry_count', 0)}")
-                if error.get('suggested_fix'):
-                    st.info(f"Suggested: {error.get('suggested_fix')}")
+            if job.get('sources'):
+                st.caption(f"Sources: {', '.join(job.get('sources'))}")
             
-            # Action buttons
-            col_act1, col_act2, col_act3 = st.columns(3)
-            with col_act1:
-                if st.button("🔄 Retry Job", key=f"err_retry_{error.get('job_id')}"):
-                    st.success(f"Scheduled retry for {error.get('job_id')}")
-            with col_act2:
-                if st.button("📧 Notify Team", key=f"notify_{error.get('job_id')}"):
-                    st.info("Notification sent to team")
-            with col_act3:
-                if st.button("✅ Acknowledge", key=f"ack_{error.get('job_id')}"):
-                    st.success(f"Acknowledged error {error.get('job_id')}")
+            # Retry button
+            if st.button("🔄 Retry This Job", key=f"retry_failed_{job.get('id')}"):
+                new_job = job.copy()
+                new_job['status'] = 'running'
+                new_job['progress'] = 10
+                new_job['started'] = datetime.now().isoformat()
+                st.session_state.etl_jobs.append(new_job)
+                st.success(f"Retrying job {job.get('id')}")
+                st.rerun()
     
     if error_count > 3:
-        st.info(f"... and {error_count - 3} more errors. Check backend logs for details.")
+        st.info(f"... and {error_count - 3} more failed jobs")
 else:
-    st.success("✅ No recent errors found!")
+    st.success("✅ No failed jobs!")
 
 st.markdown("---")
 
@@ -539,52 +624,77 @@ st.markdown("---")
 # --------------------------------------------------
 st.markdown("## 🏥 System Health Status")
 
-# Check backend connections
 health_col1, health_col2, health_col3, health_col4 = st.columns(4)
 
 with health_col1:
+    # Supabase connection check
     try:
-        # Check ETL service
-        etl_response = requests.get(f"{BACKEND_URL}/etl/health", timeout=3)
-        etl_status = "🟢 Online" if etl_response.status_code == 200 else "🔴 Error"
-        etl_msg = "Service healthy" if etl_response.status_code == 200 else "Check service"
+        if SUPABASE_CREDS.get('available'):
+            headers = {
+                'apikey': SUPABASE_CREDS['key'],
+                'Authorization': f'Bearer {SUPABASE_CREDS["key"]}'
+            }
+            
+            response = requests.get(
+                f"{SUPABASE_CREDS['url']}/rest/v1/datasets",
+                headers=headers,
+                params={'limit': '1'},
+                timeout=3
+            )
+            
+            if response.status_code == 200:
+                supabase_status = "🟢 Online"
+                datasets = fetch_datasets_from_supabase()
+                supabase_msg = f"{len(datasets)} datasets"
+            else:
+                supabase_status = "🔴 Error"
+                supabase_msg = f"HTTP {response.status_code}"
+        else:
+            supabase_status = "⚪ Offline"
+            supabase_msg = "Not configured"
+            
     except:
-        etl_status = "🔴 Offline"
-        etl_msg = "Service unreachable"
-    st.metric("ETL Service", etl_status, etl_msg)
+        supabase_status = "🔴 Offline"
+        supabase_msg = "Connection failed"
+    
+    st.metric("Supabase", supabase_status, supabase_msg)
 
 with health_col2:
-    try:
-        # Check data service
-        data_response = requests.get(f"{BACKEND_URL}/data/list", timeout=3)
-        data_status = "🟢 Online" if data_response.status_code == 200 else "🔴 Error"
-        if data_response.status_code == 200:
-            data_count = data_response.json().get('count', 0)
-            data_msg = f"{data_count} datasets"
-        else:
-            data_msg = "Service error"
-    except:
-        data_status = "🔴 Offline"
-        data_msg = "Service unreachable"
-    st.metric("Data Service", data_status, data_msg)
+    # ETL service status
+    active_jobs = sum(1 for j in st.session_state.get('etl_jobs', []) if j.get('status') == 'running')
+    total_jobs = len(st.session_state.get('etl_jobs', []))
+    
+    if active_jobs > 0:
+        etl_status = "🟢 Active"
+        etl_msg = f"{active_jobs} running"
+    elif total_jobs > 0:
+        etl_status = "🟡 Idle"
+        etl_msg = f"{total_jobs} total"
+    else:
+        etl_status = "⚪ Inactive"
+        etl_msg = "No jobs"
+    
+    st.metric("ETL Service", etl_status, etl_msg)
 
 with health_col3:
-    # Simulated resource usage (would come from monitoring system)
+    # Simulated CPU
     cpu_usage = np.random.randint(20, 60)
     cpu_trend = np.random.choice(['-', '+']) + str(np.random.randint(1, 5))
     st.metric("CPU Usage", f"{cpu_usage}%", cpu_trend)
 
 with health_col4:
+    # Simulated Memory
     memory_usage = np.random.randint(40, 80)
     memory_trend = np.random.choice(['-', '+']) + str(np.random.randint(1, 10))
     st.metric("Memory Usage", f"{memory_usage}%", memory_trend)
 
-# Auto-refresh logic (if enabled)
+# Auto-refresh logic
 if auto_refresh:
+    simulate_job_progress()
     time.sleep(30)
     st.rerun()
 else:
     last_refresh.caption(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
 
 st.markdown("---")
-st.caption(f"🔄 ETL Monitor • User: {st.session_state.user_email} • {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"🔄 ETL Monitor • {len(st.session_state.get('etl_jobs', []))} jobs • User: {st.session_state.user_email} • {datetime.now().strftime('%H:%M:%S')}")
