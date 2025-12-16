@@ -307,7 +307,7 @@ action_col1, action_col2, action_col3 = st.columns(3)
 
 with action_col1:
     if st.button("📤 Upload Data", use_container_width=True, type="primary"):
-        st.switch_page("pages/2_📁_Data.py")
+        st.switch_page("pages/2_Data.py")
 
 with action_col2:
     if st.button("📊 View Analytics", use_container_width=True):
