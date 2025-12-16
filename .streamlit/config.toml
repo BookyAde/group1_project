@@ -1,0 +1,12 @@
+[theme]
+# These are fallbacks for "Auto" theme
+primaryColor = "#8B5CF6"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#262730"
+textColor = "#F8FAFC"
+font = "sans serif"
+
+[server]
+maxUploadSize = 200
+enableXsrfProtection = true
+enableCORS = false
