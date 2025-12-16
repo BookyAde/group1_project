@@ -269,38 +269,58 @@ if selected_display:
                 if not numeric_cols:
                     st.warning("No numeric columns found for bar chart")
         
-        elif chart_type == "Scatter Plot":
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                elif chart_type == "Scatter Plot":
+                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             
             if len(numeric_cols) >= 2:
                 col1, col2 = st.columns(2)
                 with col1:
                     x_col = st.selectbox("X-axis:", numeric_cols, key='scatter_x')
                 with col2:
-                    y_col = st.selectbox("Y-axis:", numeric_cols, key='scatter_y')
+                    # Filter y_col options to exclude the selected x_col
+                    y_options = [col for col in numeric_cols if col != x_col]
+                    y_col = st.selectbox("Y-axis:", y_options, key='scatter_y')
                 
                 # Check for categorical column for color coding
                 categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
                 color_col = None
-                if categorical_cols:
-                    color_col = st.selectbox("Color by (optional):", ['None'] + categorical_cols)
-                    if color_col == 'None':
-                        color_col = None
                 
-                fig = px.scatter(df, x=x_col, y=y_col, color=color_col, 
-                                title=f"{y_col} vs {x_col}", 
-                                trendline="ols" if len(df) > 10 else None)
+                # Filter out columns that might cause duplicates
+                available_cat_cols = [col for col in categorical_cols if col not in [x_col, y_col]]
                 
-                # Customize colors
-                if not color_col:
-                    fig.update_traces(marker=dict(color='#FFD700', size=10, opacity=0.7))
+                if available_cat_cols:
+                    color_choice = st.selectbox("Color by (optional):", ['None'] + available_cat_cols, key='scatter_color')
+                    if color_choice != 'None':
+                        color_col = color_choice
                 
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Show correlation
-                if len(df) > 1:
-                    correlation = df[x_col].corr(df[y_col])
-                    st.metric(f"Correlation ({x_col} vs {y_col})", f"{correlation:.3f}")
+                # Create scatter plot WITHOUT trendline to avoid the DuplicateError
+                try:
+                    # Simple scatter plot first
+                    if color_col:
+                        fig = px.scatter(df, x=x_col, y=y_col, color=color_col,
+                                        title=f"{y_col} vs {x_col}")
+                    else:
+                        fig = px.scatter(df, x=x_col, y=y_col,
+                                        title=f"{y_col} vs {x_col}")
+                        fig.update_traces(marker=dict(color='#FFD700', size=10, opacity=0.7))
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Show correlation
+                    if len(df) > 1:
+                        correlation = df[x_col].corr(df[y_col])
+                        st.metric(f"Correlation ({x_col} vs {y_col})", f"{correlation:.3f}")
+                        
+                except Exception as scatter_error:
+                    st.error(f"Error creating scatter plot: {str(scatter_error)[:200]}")
+                    
+                    # Fallback: even simpler scatter
+                    try:
+                        fig = px.scatter(df, x=x_col, y=y_col,
+                                        title=f"{y_col} vs {x_col}")
+                        st.plotly_chart(fig, use_container_width=True)
+                    except:
+                        st.warning("Could not create scatter plot with current data")
             else:
                 st.warning("Need at least 2 numeric columns for scatter plot")
         
