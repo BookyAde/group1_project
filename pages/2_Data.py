@@ -7,6 +7,13 @@ import os
 import requests
 from io import BytesIO
 
+# Apply theme
+try:
+    from frontend.components.theme import WarehouseTheme
+    WarehouseTheme.apply_theme()  # This will use the current theme from session state
+except:
+    pass
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 try:
@@ -94,52 +101,42 @@ with upload_tab1:
                 if st.button("Upload", key=f"upload_{file.name}"):
                     with st.spinner(f"Uploading {file.name}..."):
                         try:
-                            files = {"file": (file.name, file.getvalue())}
-                            response = requests.post(
-                                f"{BACKEND_URL}/data/upload",
-                                files=files,
-                                timeout=TIMEOUT
-                            )
+                            from frontend.utils.config import SUPABASE_CREDS
                             
-                            if response.status_code == 200:
-                                st.success(f"✅ {file.name} uploaded successfully!")
-                                st.balloons()
-                                st.cache_data.clear()  # Clear cache to refresh datasets
-                                st.rerun()
+                            if SUPABASE_CREDS['available']:
+                                headers = {
+                                    'apikey': SUPABASE_CREDS['key'],
+                                    'Authorization': f'Bearer {SUPABASE_CREDS["key"]}',
+                                    'Content-Type': 'application/json',
+                                }
+                                
+                                dataset_data = {
+                                    "filename": file.name,
+                                    "size_mb": file.size / (1024 * 1024),
+                                    "rows": 0,
+                                    "user_email": st.session_state.user_email,
+                                    "uploaded_at": datetime.now().isoformat()
+                                }
+                                
+                                response = requests.post(
+                                    f"{SUPABASE_CREDS['url']}/rest/v1/datasets",
+                                    headers=headers,
+                                    json=dataset_data,
+                                    timeout=TIMEOUT
+                                )
+                                
+                                if response.status_code == 201:
+                                    st.success(f"✅ {file.name} uploaded successfully!")
+                                    st.balloons()
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                else:
+                                    st.error(f"Upload failed: {response.status_code}")
                             else:
-                                st.error(f"Upload failed: {response.status_code}")
+                                st.error("Supabase not configured")
+                                
                         except Exception as e:
                             st.error(f"Upload error: {str(e)[:100]}")
-
-with upload_tab2:
-    st.markdown("Create sample data for testing:")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("📊 Sales Data", use_container_width=True):
-            # Create sample sales data
-            import numpy as np
-            dates = pd.date_range('2024-01-01', periods=100, freq='D')
-            sample_df = pd.DataFrame({
-                'date': dates,
-                'product': ['Product ' + str(i % 5 + 1) for i in range(100)],
-                'sales': np.random.normal(10000, 2000, 100),
-                'quantity': np.random.randint(50, 200, 100)
-            })
-            
-            # Convert to CSV bytes
-            csv_bytes = sample_df.to_csv(index=False).encode()
-            files = {"file": ("sample_sales.csv", csv_bytes)}
-            
-            with st.spinner("Creating sample sales data..."):
-                try:
-                    response = requests.post(f"{BACKEND_URL}/data/upload", files=files, timeout=TIMEOUT)
-                    if response.status_code == 200:
-                        st.success("✅ Sample sales data created!")
-                        st.cache_data.clear()
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {str(e)[:100]}")
 
 # List datasets
 st.markdown("## 📋 Your Datasets")

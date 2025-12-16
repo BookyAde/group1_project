@@ -1,51 +1,97 @@
 # frontend/utils/config.py
 import os
-import streamlit as st
+import sys
+
+def safe_get_secrets():
+    """Safely get Streamlit secrets without raising errors"""
+    try:
+        import streamlit as st
+        
+        # Check if we're in a proper Streamlit context
+        if not hasattr(st, 'secrets'):
+            return {}
+            
+        # Try to access secrets - handle missing file gracefully
+        try:
+            # This will only work if secrets.toml exists and is valid
+            if st.secrets:
+                return dict(st.secrets)
+        except Exception:
+            # File doesn't exist or is invalid
+            return {}
+            
+    except ImportError:
+        # streamlit module not available
+        pass
+        
+    return {}
 
 def get_backend_url():
-    """
-    Determine backend URL based on environment.
-    Priority: Streamlit secrets > Environment variable > Default local
-    """
+    """Get backend URL with multiple fallbacks"""
     
-    # 1. Check Streamlit Cloud secrets first (production)
-    if hasattr(st, 'secrets'):
-        # Option A: Direct Supabase REST URL
-        if 'SUPABASE_URL' in st.secrets:
-            supabase_url = st.secrets['SUPABASE_URL']
-            # Return Supabase REST endpoint
+    # Get secrets safely
+    secrets = safe_get_secrets()
+    
+    # Priority 1: Secrets file
+    if 'SUPABASE_URL' in secrets:
+        supabase_url = secrets['SUPABASE_URL']
+        if supabase_url and supabase_url.strip():
             return f"{supabase_url}/rest/v1"
-        
-        # Option B: Custom backend URL in secrets
-        if 'BACKEND_URL' in st.secrets:
-            return st.secrets['BACKEND_URL']
     
-    # 2. Check environment variables
-    env_backend = os.getenv('BACKEND_URL')
-    if env_backend:
-        return env_backend
+    if 'BACKEND_URL' in secrets:
+        backend_url = secrets['BACKEND_URL']
+        if backend_url and backend_url.strip():
+            return backend_url
     
+    # Priority 2: Environment variables
     env_supabase = os.getenv('SUPABASE_URL')
     if env_supabase:
         return f"{env_supabase}/rest/v1"
     
-    # 3. Default fallback (local development)
+    env_backend = os.getenv('BACKEND_URL')
+    if env_backend:
+        return env_backend
+    
+    # Priority 3: Check for .env file
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        env_supabase = os.getenv('SUPABASE_URL')
+        if env_supabase:
+            return f"{env_supabase}/rest/v1"
+            
+        env_backend = os.getenv('BACKEND_URL')
+        if env_backend:
+            return env_backend
+    except ImportError:
+        pass
+    
+    # Priority 4: Default fallback
     return "http://localhost:8000/api/v1"
 
 def get_supabase_credentials():
-    """Get Supabase credentials for direct client use"""
-    credentials = {'url': '', 'key': '', 'available': False}
+    """Get Supabase credentials with multiple fallbacks"""
+    credentials = {
+        'url': '',
+        'key': '',
+        'available': False,
+        'source': 'none'
+    }
     
-    # Check Streamlit secrets first
-    if hasattr(st, 'secrets'):
-        if 'SUPABASE_URL' in st.secrets and 'SUPABASE_KEY' in st.secrets:
-            credentials['url'] = st.secrets['SUPABASE_URL']
-            credentials['key'] = st.secrets['SUPABASE_KEY']
+    # 1. Try secrets file
+    secrets = safe_get_secrets()
+    if 'SUPABASE_URL' in secrets and 'SUPABASE_KEY' in secrets:
+        url = secrets['SUPABASE_URL']
+        key = secrets['SUPABASE_KEY']
+        if url and key and url.strip() and key.strip():
+            credentials['url'] = url
+            credentials['key'] = key
             credentials['available'] = True
             credentials['source'] = 'secrets'
             return credentials
     
-    # Check environment variables
+    # 2. Try environment variables
     env_url = os.getenv('SUPABASE_URL')
     env_key = os.getenv('SUPABASE_KEY')
     
@@ -56,20 +102,47 @@ def get_supabase_credentials():
         credentials['source'] = 'env'
         return credentials
     
+    # 3. Try .env file
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        env_url = os.getenv('SUPABASE_URL')
+        env_key = os.getenv('SUPABASE_KEY')
+        
+        if env_url and env_key:
+            credentials['url'] = env_url
+            credentials['key'] = env_key
+            credentials['available'] = True
+            credentials['source'] = 'dotenv'
+            return credentials
+    except ImportError:
+        pass
+    
     return credentials
 
-# Global config variables
+# Initialize - these won't crash if secrets are missing
 BACKEND_URL = get_backend_url()
 SUPABASE_CREDS = get_supabase_credentials()
 TIMEOUT = 30
 
-# Debug info (remove in production)
+# Safe debug function
 def debug_info():
-    """Show debug information"""
+    """Show debug information without crashing"""
     info = {
         'backend_url': BACKEND_URL,
         'supabase_available': SUPABASE_CREDS['available'],
-        'environment': 'production' if 'STREAMLIT_CLOUD' in os.environ else 'development',
-        'has_secrets': hasattr(st, 'secrets') if 'st' in locals() else False
+        'supabase_source': SUPABASE_CREDS['source'],
+        'python_version': sys.version[:20],
+        'cwd': os.getcwd()
     }
+    
+    # Safely add Streamlit info
+    try:
+        import streamlit as st
+        info['has_streamlit'] = True
+        info['streamlit_version'] = st.__version__
+    except ImportError:
+        info['has_streamlit'] = False
+        
     return info
